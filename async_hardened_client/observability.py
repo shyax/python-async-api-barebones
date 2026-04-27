@@ -23,17 +23,15 @@ from typing import Any
 
 import structlog
 
+_DEFAULT_LEVEL = logging.INFO
+
 
 def configure_logging(level: int = logging.INFO, *, force: bool = False) -> None:
-    """Initialize structlog for JSON output. Idempotent unless `force`."""
+    """Initialize structlog for JSON output to stderr. Idempotent unless
+    `force`. We deliberately route every log line to stderr so CLI tools
+    can print structured JSON results to stdout without contention."""
     if structlog.is_configured() and not force:
         return
-    logging.basicConfig(
-        format="%(message)s",
-        stream=sys.stderr,
-        level=level,
-        force=True,
-    )
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -44,6 +42,7 @@ def configure_logging(level: int = logging.INFO, *, force: bool = False) -> None
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
         cache_logger_on_first_use=True,
     )
 
