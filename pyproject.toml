@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "async-hardened-client"
+version = "0.1.0"
+description = "Production-grade async HTTP client with rate limiting, circuit breaking, deduplication, retries, dead-letter queue and crash recovery."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Adventum Group LLC" }]
+dependencies = [
+    "aiohttp>=3.9",
+    "aiosqlite>=0.19",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+mock = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.26",
+]
+
+[project.scripts]
+ahc = "async_hardened_client.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["async_hardened_client*", "mock_server*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

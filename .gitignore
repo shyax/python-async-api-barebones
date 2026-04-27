@@ -1,3 +1,11 @@
+# Project-specific
+.venv/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+ahc_state*.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
