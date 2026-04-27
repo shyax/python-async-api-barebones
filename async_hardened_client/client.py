@@ -65,6 +65,13 @@ from async_hardened_client.storage import Storage
 log = get_logger()
 
 
+def _is_throttle(exc: BaseException) -> bool:
+    """A 429 should not trip the circuit breaker — the upstream is alive,
+    just asking us to slow down. The retry path with Retry-After is the
+    right place to handle it."""
+    return isinstance(exc, RetryableError) and getattr(exc, "status_code", None) == 429
+
+
 # ---- Body parsing helpers --------------------------------------------------
 
 async def _read_response(resp: aiohttp.ClientResponse) -> tuple[Any, dict[str, str]]:
@@ -282,7 +289,11 @@ class AsyncHardenedClient:
         try:
             response = await self._execute(req, item.attempt)
         except (RetryableError, NonRetryableError) as exc:
-            await breaker.on_failure()
+            # 429 means the upstream is alive but throttling — not a
+            # circuit-breaker signal. Skip on_failure so backpressure
+            # from the rate limiter doesn't trip the breaker.
+            if not _is_throttle(exc):
+                await breaker.on_failure()
             await self._handle_retry_or_dlq(item, exc)
             return
         except Exception as exc:  # transport-level transient
