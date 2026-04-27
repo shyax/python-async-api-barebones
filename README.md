@@ -26,6 +26,47 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the component diagram and
 the request lifecycle, and [`RUNBOOK.md`](./RUNBOOK.md) for operational
 procedures (DLQ replay, recovery, reading metrics).
 
+## Architecture at a glance
+
+```mermaid
+flowchart TD
+    Caller([caller]) -->|request| Client[AsyncHardenedClient.request]
+    Client --> Dedup{InFlightRegistry<br/>idempotency_key<br/>sha256 method+url+params+body}
+
+    Dedup -->|duplicate| WaitFuture[await shared Future]
+    Dedup -->|owner| Storage[(Storage<br/>SQLite WAL<br/>inflight upsert)]
+    Storage --> Queue[[RequestQueue<br/>bounded asyncio.Queue<br/>backpressure]]
+    Queue --> Workers((workers x N))
+
+    Workers --> Breaker{CircuitBreaker<br/>before_call}
+    Breaker -->|OPEN| RetryPath
+    Breaker -->|CLOSED / HALF_OPEN probe| Limiter[RateLimiter<br/>token bucket per host]
+    Limiter --> HTTP[aiohttp session<br/>pooled connector]
+    HTTP --> Classify{classify}
+
+    Classify -->|2xx / 3xx| Success
+    Classify -->|5xx or network| RetryPath{retries left?}
+    Classify -->|429| RetryPath
+    Classify -->|other 4xx or exhausted| Terminal
+
+    Success --> OnSuccess[breaker.on_success<br/>delete inflight<br/>resolve future]
+    OnSuccess --> WaitFuture
+
+    RetryPath -->|yes| Backoff[full-jitter backoff<br/>+ Retry-After<br/>increment_retry]
+    Backoff --> Queue
+    RetryPath -->|no| Terminal
+
+    Terminal[push_dead_letter<br/>delete inflight<br/>fail future w/ DeadLetterError]
+    Terminal --> WaitFuture
+
+    classDef store fill:#f5d6a8,stroke:#b8860b,color:#000
+    classDef worker fill:#cce5ff,stroke:#1f6feb,color:#000
+    classDef terminal fill:#ffd0d0,stroke:#cc0000,color:#000
+    class Storage store
+    class Workers worker
+    class Terminal terminal
+```
+
 ## Layout
 
 ```
