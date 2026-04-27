@@ -115,6 +115,7 @@ class AsyncHardenedClient:
         self._rate_limiter = HostRateLimiter(self._cfg.rate_limit)
         self._breakers = HostCircuitBreakers(self._cfg.circuit_breaker)
         self._workers: list[asyncio.Task[None]] = []
+        self._reschedules: set[asyncio.Task[None]] = set()
         self._stopping = asyncio.Event()
         self._metrics = Metrics(queue_max_size=self._cfg.queue.max_size)
         self._response_hook: ResponseHook | None = None
@@ -148,8 +149,9 @@ class AsyncHardenedClient:
             return
         self._stopping.set()
         # Drain queued work before shutting down — this is what gives us
-        # the "no dropped requests" guarantee on graceful exit.
-        await self._queue.join()
+        # the "no dropped requests" guarantee on graceful exit. We loop
+        # because rescheduled retries can re-enqueue after the first join.
+        await self.drain()
         for w in self._workers:
             w.cancel()
         for w in self._workers:
@@ -161,6 +163,19 @@ class AsyncHardenedClient:
         await self._session.close()
         self._session = None
         await self._storage.close()
+
+    async def drain(self) -> None:
+        """Wait until the queue and all pending retry-reschedule tasks have
+        settled. Safe to call without holding the stop event — used by
+        tests to cleanly observe terminal state of recovered work."""
+        while True:
+            await self._queue.join()
+            pending = [t for t in self._reschedules if not t.done()]
+            if not pending:
+                return
+            # Wait for the next batch of reschedule sleeps to fire and
+            # re-enqueue (or be cancelled), then re-check.
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def __aenter__(self) -> AsyncHardenedClient:
         await self.start()
@@ -378,7 +393,9 @@ class AsyncHardenedClient:
                 delay_seconds=round(delay, 3),
                 error=str(exc),
             )
-            asyncio.create_task(self._reschedule(item, new_attempt, delay))
+            task = asyncio.create_task(self._reschedule(item, new_attempt, delay))
+            self._reschedules.add(task)
+            task.add_done_callback(self._reschedules.discard)
             return
 
         # Terminal: dead-letter and fail the future.
